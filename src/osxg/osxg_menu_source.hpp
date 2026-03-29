@@ -1,3 +1,8 @@
+#pragma once
+
+namespace osxg
+{
+	constexpr const char* osxg_menu_lua_source = R"lua(
 -- OSXG+ Community Extension for YimMenu
 -- BASE_URL should be set to your Cloudflare Worker URL
 local BASE_URL = "https://osxg-auth.1221647.workers.dev"
@@ -7,6 +12,8 @@ local auth_id = nil
 local sessions = {}
 local last_session_fetch = 0
 local fetching_sessions = false
+local is_hosting = false
+local last_heartbeat = 0
 
 -- Helper: Load token from file
 local function load_token()
@@ -70,6 +77,31 @@ local function poll_invites()
                         osxg.join_session_by_rockstar_id(tonumber(data.rid))
                     end
                 end
+
+                -- Heartbeat and session tracking logic
+                if is_hosting then
+                    if network.is_session_started() then
+                        if (os.time() - last_heartbeat > 60) then
+                            local rid = osxg.get_local_rockstar_id()
+                            local name = osxg.get_local_player_name()
+                            local body = osxg.json_stringify({
+                                hostName = name,
+                                rid = rid,
+                                sessionType = "Public"
+                            })
+                            osxg.http_post(BASE_URL .. "/host?token=" .. token, {["Content-Type"]="application/json"}, body)
+                            last_heartbeat = os.time()
+                        end
+                    else
+                        local rid = osxg.get_local_rockstar_id()
+                        if rid ~= 0 then
+                            local body = osxg.json_stringify({ rid = rid })
+                            osxg.http_post(BASE_URL .. "/unhost?token=" .. token, {["Content-Type"]="application/json"}, body)
+                        end
+                        is_hosting = false
+                        gui.show_message("OSXG+", "Session unhosted (You left GTA Online)")
+                    end
+                end
             end
             s:sleep(5000) -- Poll every 5 seconds
         end
@@ -131,30 +163,43 @@ osxg_tab:add_imgui(function()
     ImGui.SameLine()
 
     if network.is_session_started() then
-        if ImGui.Button("Share Current Session") then
-            script.run_in_fiber(function(s)
-                local rid = osxg.get_local_rockstar_id()
-                
-                -- Retry fetching name if it says Unknown
-                local name = "Unknown"
-                for i = 1, 15 do
-                    name = osxg.get_local_player_name()
-                    if name ~= "Unknown" and name ~= "" then break end
-                    s:sleep(1000)
-                end
-                
-                local body = osxg.json_stringify({
-                    hostName = name,
-                    rid = rid,
-                    sessionType = "Public"
-                })
-                local res = osxg.http_post(BASE_URL .. "/host?token=" .. token, {["Content-Type"]="application/json"}, body)
-                if res.status == 200 then
-                    gui.show_success("OSXG+", "Session Shared Successfully!")
-                else
-                    gui.show_error("OSXG+", "Failed to host: " .. tostring(res.status))
-                end
-            end)
+        if not is_hosting then
+            if ImGui.Button("Share Current Session") then
+                script.run_in_fiber(function(s)
+                    local rid = osxg.get_local_rockstar_id()
+                    
+                    local name = "Unknown"
+                    for i = 1, 15 do
+                        name = osxg.get_local_player_name()
+                        if name ~= "Unknown" and name ~= "" then break end
+                        s:sleep(1000)
+                    end
+                    
+                    local body = osxg.json_stringify({
+                        hostName = name,
+                        rid = rid,
+                        sessionType = "Public"
+                    })
+                    local res = osxg.http_post(BASE_URL .. "/host?token=" .. token, {["Content-Type"]="application/json"}, body)
+                    if res.status == 200 then
+                        gui.show_success("OSXG+", "Session Shared Successfully!")
+                        is_hosting = true
+                        last_heartbeat = os.time()
+                    else
+                        gui.show_error("OSXG+", "Failed to host: " .. tostring(res.status))
+                    end
+                end)
+            end
+        else
+            if ImGui.Button("Stop Sharing Session") then
+                script.run_in_fiber(function(s)
+                    local rid = osxg.get_local_rockstar_id()
+                    local body = osxg.json_stringify({ rid = rid })
+                    osxg.http_post(BASE_URL .. "/unhost?token=" .. token, {["Content-Type"]="application/json"}, body)
+                    is_hosting = false
+                    gui.show_success("OSXG+", "Session is no longer shared.")
+                end)
+            end
         end
         ImGui.SameLine()
     end
@@ -200,6 +245,8 @@ osxg_tab:add_imgui(function()
             local res = osxg.http_post(BASE_URL .. "/host?token=" .. token, {["Content-Type"]="application/json"}, body)
             if res.status == 200 then
                 gui.show_success("OSXG+", "New Session Hosted successfully!")
+                is_hosting = true
+                last_heartbeat = os.time()
             else
                 gui.show_error("OSXG+", "Failed to host: " .. tostring(res.status))
             end
@@ -222,3 +269,5 @@ osxg_tab:add_imgui(function()
         end
     end
 end)
+)lua";
+}

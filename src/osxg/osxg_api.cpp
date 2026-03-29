@@ -97,6 +97,17 @@ namespace osxg
 		return "Unknown";
 	}
 
+	static std::string get_local_player_name()
+	{
+		if (auto self = big::g_player_service->get_self(); self && self->is_valid())
+		{
+			const char* name = self->get_name();
+			if (name && strlen(name) > 0)
+				return std::string(name);
+		}
+		return "Unknown";
+	}
+
 	static void open_url(const std::string& url)
 	{
 		ShellExecuteA(NULL, "open", url.c_str(), NULL, NULL, SW_SHOWNORMAL);
@@ -191,6 +202,7 @@ namespace osxg
 		ns["json_parse"] = json_parse;
 		ns["json_stringify"] = json_stringify;
 		ns["get_player_name"] = get_player_name;
+		ns["get_local_player_name"] = get_local_player_name;
 		ns["open_url"] = open_url;
 	}
 }

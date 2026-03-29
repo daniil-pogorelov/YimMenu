@@ -125,9 +125,14 @@ export default {
       // POST /host (Added the Discord Button!)
       if (method === "POST" && path === "/host") {
         const { hostName, rid, sessionType } = await request.json();
-        await env.OSXG_SESSIONS.put(rid.toString(), JSON.stringify({ hostName, rid, sessionType, timestamp: Date.now() }), { expirationTtl: 7200 });
+        
+        const existingSession = await env.OSXG_SESSIONS.get(rid.toString());
+        
+        // Expiration is 120 seconds. Client must ping /host periodically to keep it alive.
+        await env.OSXG_SESSIONS.put(rid.toString(), JSON.stringify({ hostName, rid, sessionType, timestamp: Date.now() }), { expirationTtl: 120 });
 
-        if (WEBHOOK_URL) {
+        // Only send discord message if it's a completely newly hosted session
+        if (!existingSession && WEBHOOK_URL) {
           await fetch(WEBHOOK_URL, {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -144,6 +149,15 @@ export default {
           });
         }
         return new Response("Session Hosted!", { status: 200 });
+      }
+
+      // POST /unhost (Proactively remove session from active list)
+      if (method === "POST" && path === "/unhost") {
+        const { rid } = await request.json();
+        if (rid) {
+            await env.OSXG_SESSIONS.delete(rid.toString());
+        }
+        return new Response("Session Unhosted", { status: 200 });
       }
 
       // GET /invites/check (The Mailman checking the Inbox)
