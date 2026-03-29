@@ -1,5 +1,5 @@
 #pragma once
-#include <sol/sol.hpp>
+#include "lua/sol_include.hpp"
 
 namespace osxg
 {

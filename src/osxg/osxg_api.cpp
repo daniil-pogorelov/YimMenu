@@ -93,7 +93,7 @@ namespace osxg
 	static std::string get_player_name(int pid)
 	{
 		if (auto plyr = big::g_player_service->get_by_id(pid); plyr && plyr->is_valid())
-			return plyr->get_name();
+			return std::string(plyr->get_name());
 		return "Unknown";
 	}
 
