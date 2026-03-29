@@ -139,7 +139,9 @@ namespace osxg
 		if (b64.empty()) return;
 		big::g_fiber_pool->queue_job([b64]() {
 			rage::rlSessionInfo info;
-			if (big::g_pointers->m_gta.m_decode_session_info(&info, b64.c_str(), nullptr))
+			std::vector<char> buf(b64.begin(), b64.end());
+			buf.push_back('\0');
+			if (big::g_pointers->m_gta.m_decode_session_info(&info, buf.data(), nullptr))
 				big::session::join_session(info);
 			else
 				LOG(WARNING) << "[OSXG] Failed to decode session info.";
