@@ -3,8 +3,6 @@
 #include "lua/sol_include.hpp"
 #include "services/players/player_service.hpp"
 #include "util/session.hpp"
-#include "gta_util.hpp"
-#include "pointers.hpp"
 #include "core/enums.hpp"
 #include "http_client/http_client.hpp"
 #include "logger/logger.hpp"

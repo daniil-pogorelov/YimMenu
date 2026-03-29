@@ -80,7 +80,7 @@ namespace big::session
 		misc::clear_bit((int*)&scr_globals::gpbd_fm_3.as<GPBD_FM_3*>()->Entries[self::id].BossGoon.ActiveFreemodeEvents[idx], bit);
 	}
 
-	inline void join_session(const rage::rlSessionInfo& info)
+	inline void join_session(const rage::rlSessionInfo& info, uint64_t pass_rid = 0)
 	{
 		if (SCRIPT::GET_NUMBER_OF_THREADS_RUNNING_THE_SCRIPT_WITH_THIS_HASH("maintransition"_J) != 0 || STREAMING::IS_PLAYER_SWITCH_IN_PROGRESS())
 		{
@@ -90,6 +90,7 @@ namespace big::session
 
 		g.session.join_queued = true;
 		g.session.info        = info;
+		g.session.target_rid  = pass_rid;
 		session::join_type({eSessionType::NEW_PUBLIC});
 		if (SCRIPT::GET_NUMBER_OF_THREADS_RUNNING_THE_SCRIPT_WITH_THIS_HASH("maintransition"_J) == 0)
 		{
@@ -119,7 +120,7 @@ namespace big::session
 
 			if (state.status == 3 && success)
 			{
-				join_session(result.m_session_info);
+				join_session(result.m_session_info, rid);
 				return;
 			}
 		}

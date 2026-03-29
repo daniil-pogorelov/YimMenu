@@ -49,12 +49,13 @@ export default {
       if (interaction.type === 3) {
         const customId = interaction.data.custom_id; // e.g., "join_123456789"
         
-        if (customId.startsWith("join_")) {
-          const targetRid = customId.split("_")[1];
-          const clickerId = interaction.member ? interaction.member.user.id : interaction.user.id;
+        // Expects joinrid_<rid> or joininfo_<rid>
+        const isInfo = customId.startsWith("joininfo_");
+        const targetRid = customId.split("_")[1];
+        const clickerId = interaction.member ? interaction.member.user.id : interaction.user.id;
 
-          // Fetch the session info payload if it exists
-          let sessionInfo = "";
+        let sessionInfo = "";
+        if (isInfo) {
           const sessionPayload = await env.OSXG_SESSIONS.get(targetRid);
           if (sessionPayload) {
               try {
@@ -62,16 +63,21 @@ export default {
                   if (parsed.sessionInfo) sessionInfo = parsed.sessionInfo;
               } catch (e) {}
           }
-
-          // Save the invite for the Lua script to pick up (expires in 60 seconds)
-          await env.OSXG_INVITES.put(clickerId, JSON.stringify({ rid: targetRid, sessionInfo }), { expirationTtl: 60 });
-
-          // Send a private ephemeral message back to the user in Discord
-          return new Response(JSON.stringify({
-            type: 4,
-            data: { content: "✅ Invite sent to GTA V! Please tab back into the game.", flags: 64 }
-          }), { headers: { "Content-Type": "application/json" } });
         }
+
+        // Save the invite. Expires in 60 seconds
+        const inviteData = {
+            type: isInfo ? "info" : "rid",
+            rid: targetRid,
+            sessionInfo: sessionInfo
+        };
+        await env.OSXG_INVITES.put(clickerId, JSON.stringify(inviteData), { expirationTtl: 60 });
+
+        // Send a private ephemeral message back to the user in Discord
+        return new Response(JSON.stringify({
+          type: 4,
+          data: { content: `✅ ${isInfo ? 'IP Bypass' : 'Rockstar ID'} invite sent to GTA V! Please tab back into the game.`, flags: 64 }
+        }), { headers: { "Content-Type": "application/json" } });
       }
       return new Response("Unknown interaction", { status: 400 });
     }
@@ -146,23 +152,33 @@ export default {
         // Only send discord message if it's a completely newly hosted session
         if (!existingSession) {
           if (BOT_TOKEN && CHANNEL_ID) {
+            const body = JSON.stringify({
+              content: `🟢 **${hostName}** just hosted a **${sessionType}** GTA V Session!`,
+              components: [{
+                type: 1,
+                components: [
+                  {
+                    type: 2,
+                    style: 1, // Blurple
+                    label: "Join 🎮 (RID)",
+                    custom_id: `joinrid_${rid.toString()}`
+                  },
+                  {
+                    type: 2,
+                    style: 2, // Gray
+                    label: "Join 🌐 (IP Bypass)",
+                    custom_id: `joininfo_${rid.toString()}`
+                  }
+                ]
+              }]
+            });
             await fetch(`https://discord.com/api/v10/channels/${CHANNEL_ID}/messages`, {
               method: "POST", 
               headers: { 
                   "Content-Type": "application/json",
                   "Authorization": `Bot ${BOT_TOKEN}`
               },
-              body: JSON.stringify({
-                embeds: [{
-                  title: "🟢 New OSXG+ Session!",
-                  description: `**Host:** ${hostName}\n**Type:** ${sessionType}\n**RID:** \`${rid}\``,
-                  color: 5763719
-                }],
-                components: [{
-                  type: 1,
-                  components: [{ type: 2, style: 3, label: "Join Session", custom_id: `join_${rid}`, emoji: { name: "🎮" } }]
-                }]
-              })
+              body: body
             });
           } else if (WEBHOOK_URL) {
             // Fallback for standard webhooks (Discord API strips buttons from standard webhooks)
@@ -192,11 +208,10 @@ export default {
         if (pendingInvite) {
           await env.OSXG_INVITES.delete(discordId); // Delete it so we don't join twice
           try {
-            // It might be a JSON payload from the new worker or an old raw RID string
-            const data = JSON.parse(pendingInvite);
-            return new Response(JSON.stringify({ rid: data.rid, sessionInfo: data.sessionInfo }), { headers: { "Content-Type": "application/json" } });
+              const data = JSON.parse(pendingInvite);
+              return new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } });
           } catch(e) {
-            return new Response(JSON.stringify({ rid: pendingInvite }), { headers: { "Content-Type": "application/json" } });
+              return new Response(JSON.stringify({ rid: pendingInvite }), { headers: { "Content-Type": "application/json" } });
           }
         }
         return new Response(JSON.stringify({ status: "empty" }), { headers: { "Content-Type": "application/json" } });

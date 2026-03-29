@@ -72,11 +72,11 @@ local function poll_invites()
                 local res = osxg.http_get(BASE_URL .. "/invites/check?token=" .. token, {})
                 if res.status == 200 then
                     local data = parse_json(res.body)
-                    if data and data.sessionInfo and data.sessionInfo ~= "" then
-                        gui.show_message("OSXG+", "Joining session directly from Discord...")
+                    if data and data.type == "info" and data.sessionInfo and data.sessionInfo ~= "" then
+                        gui.show_message("OSXG+", "Joining Session via IP bypass...")
                         osxg.join_session_by_info(data.sessionInfo)
                     elseif data and data.rid then
-                        gui.show_message("OSXG+", "Joining session via Rockstar ID from Discord...")
+                        gui.show_message("OSXG+", "Joining Session via Rockstar ID...")
                         osxg.join_session_by_rockstar_id(tonumber(data.rid))
                     end
                 end
@@ -288,11 +288,7 @@ osxg_tab:add_imgui(function()
             ImGui.Text(string.format("%s (%s)", session.hostName, session.sessionType))
             ImGui.SameLine()
             if ImGui.Button("Join##" .. tostring(session.rid)) then
-                if session.sessionInfo and session.sessionInfo ~= "" then
-                    osxg.join_session_by_info(session.sessionInfo)
-                else
-                    osxg.join_session_by_rockstar_id(tonumber(session.rid))
-                end
+                osxg.join_session_by_rockstar_id(tonumber(session.rid))
             end
             ImGui.EndGroup()
         end
