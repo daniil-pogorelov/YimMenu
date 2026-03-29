@@ -109,6 +109,13 @@ namespace osxg
 		});
 	}
 
+	static void create_public_session()
+	{
+		big::g_fiber_pool->queue_job([]() {
+			big::session::join_type(eSessionType::NEW_PUBLIC);
+		});
+	}
+
 	static sol::object http_get(const std::string& url, sol::table headers, sol::this_state s)
 	{
 		sol::state_view lua(s);
@@ -178,6 +185,7 @@ namespace osxg
 		ns["get_local_rockstar_id"] = get_local_rockstar_id;
 		ns["get_player_rockstar_id"] = get_player_rockstar_id;
 		ns["join_session_by_rockstar_id"] = join_session_by_rockstar_id;
+		ns["create_public_session"] = create_public_session;
 		ns["http_get"] = http_get;
 		ns["http_post"] = http_post;
 		ns["json_parse"] = json_parse;

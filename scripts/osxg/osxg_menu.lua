@@ -6,6 +6,7 @@ local token = nil
 local auth_id = nil
 local sessions = {}
 local last_session_fetch = 0
+local fetching_sessions = false
 
 -- Helper: Load token from file
 local function load_token()
@@ -51,7 +52,7 @@ local function poll_auth()
                 auth_id = nil
                 return
             end
-            s:yield(2000) -- Poll every 2 seconds
+            s:sleep(2000) -- Poll every 2 seconds
         end
     end)
 end
@@ -70,7 +71,7 @@ local function poll_invites()
                     end
                 end
             end
-            s:yield(5000) -- Poll every 5 seconds
+            s:sleep(5000) -- Poll every 5 seconds
         end
     end)
 end
@@ -80,7 +81,7 @@ load_token()
 poll_invites()
 
 -- UI Tab
-local osxg_tab = gui.get_tab("Network"):add_tab("OSXG+ Community")
+local osxg_tab = gui.get_tab("GUI_TAB_NETWORK"):add_tab("OSXG+ Community")
 
 osxg_tab:add_imgui(function()
     if not token then
@@ -115,35 +116,73 @@ osxg_tab:add_imgui(function()
 
     ImGui.Separator()
 
-    if ImGui.Button("Refresh Sessions") or (os.time() - last_session_fetch > 30) then
+    if not fetching_sessions and (ImGui.Button("Refresh Sessions") or (os.time() - last_session_fetch > 30)) then
+        fetching_sessions = true
         script.run_in_fiber(function(s)
             local res = osxg.http_get(BASE_URL .. "/sessions?token=" .. token, {})
             if res.status == 200 then
                 sessions = parse_json(res.body) or {}
-                last_session_fetch = os.time()
             end
+            last_session_fetch = os.time()
+            fetching_sessions = false
         end)
     end
 
     ImGui.SameLine()
 
-    if ImGui.Button("Host My Session") then
-        script.run_in_fiber(function(s)
-            local rid = osxg.get_local_rockstar_id()
-            local name = osxg.get_player_name(self.get_id())
-            
-            local body = osxg.json_stringify({
-                hostName = name,
-                rid = rid,
-                sessionType = "Public"
-            })
-            local res = osxg.http_post(BASE_URL .. "/host?token=" .. token, {["Content-Type"]="application/json"}, body)
-            if res.status == 200 then
-                gui.show_success("OSXG+", "Session Hosted!")
-            else
-                gui.show_error("OSXG+", "Failed to host: " .. tostring(res.status))
-            end
-        end)
+    if network.is_session_started() then
+        if ImGui.Button("Host My Session") then
+            script.run_in_fiber(function(s)
+                local rid = osxg.get_local_rockstar_id()
+                local name = osxg.get_player_name(self.get_id())
+                
+                local body = osxg.json_stringify({
+                    hostName = name,
+                    rid = rid,
+                    sessionType = "Public"
+                })
+                local res = osxg.http_post(BASE_URL .. "/host?token=" .. token, {["Content-Type"]="application/json"}, body)
+                if res.status == 200 then
+                    gui.show_success("OSXG+", "Session Hosted!")
+                else
+                    gui.show_error("OSXG+", "Failed to host: " .. tostring(res.status))
+                end
+            end)
+        end
+    else
+        if ImGui.Button("Create & Host Session") then
+            script.run_in_fiber(function(s)
+                gui.show_message("OSXG+", "Creating new Public Session...")
+                osxg.create_public_session()
+                
+                -- Wait until the session actually starts
+                while not network.is_session_started() do
+                    s:sleep(1000)
+                end
+                
+                -- Extra safe delay to let local player spawn and RID assign
+                s:sleep(10000)
+
+                local rid = osxg.get_local_rockstar_id()
+                if rid == 0 then
+                    gui.show_error("OSXG+", "Failed to fetch Rockstar ID.")
+                    return
+                end
+
+                local name = osxg.get_player_name(self.get_id())
+                local body = osxg.json_stringify({
+                    hostName = name,
+                    rid = rid,
+                    sessionType = "Public"
+                })
+                local res = osxg.http_post(BASE_URL .. "/host?token=" .. token, {["Content-Type"]="application/json"}, body)
+                if res.status == 200 then
+                    gui.show_success("OSXG+", "Session Hosted successfully!")
+                else
+                    gui.show_error("OSXG+", "Failed to host: " .. tostring(res.status))
+                end
+            end)
+        end
     end
 
     ImGui.SeparatorText("Active Sessions")
