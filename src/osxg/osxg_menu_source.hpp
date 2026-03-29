@@ -72,8 +72,11 @@ local function poll_invites()
                 local res = osxg.http_get(BASE_URL .. "/invites/check?token=" .. token, {})
                 if res.status == 200 then
                     local data = parse_json(res.body)
-                    if data and data.rid then
-                        gui.show_message("OSXG+", "Joining session from Discord...")
+                    if data and data.sessionInfo and data.sessionInfo ~= "" then
+                        gui.show_message("OSXG+", "Joining session directly from Discord...")
+                        osxg.join_session_by_info(data.sessionInfo)
+                    elseif data and data.rid then
+                        gui.show_message("OSXG+", "Joining session via Rockstar ID from Discord...")
                         osxg.join_session_by_rockstar_id(tonumber(data.rid))
                     end
                 end
@@ -84,10 +87,12 @@ local function poll_invites()
                         if (os.time() - last_heartbeat > 60) then
                             local rid = osxg.get_local_rockstar_id()
                             local name = osxg.get_local_player_name()
+                            local sessionInfo = osxg.get_local_session_info()
                             local body = osxg.json_stringify({
                                 hostName = name,
                                 rid = rid,
-                                sessionType = "Public"
+                                sessionType = "Public",
+                                sessionInfo = sessionInfo
                             })
                             osxg.http_post(BASE_URL .. "/host?token=" .. token, {["Content-Type"]="application/json"}, body)
                             last_heartbeat = os.time()
@@ -148,7 +153,23 @@ osxg_tab:add_imgui(function()
 
     ImGui.Separator()
 
-    if not fetching_sessions and (ImGui.Button("Refresh Sessions") or (os.time() - last_session_fetch > 30)) then
+    if fetching_sessions then
+        ImGui.Button("Refreshing...")
+    else
+        if ImGui.Button("Refresh Sessions") then
+            fetching_sessions = true
+            script.run_in_fiber(function(s)
+                local res = osxg.http_get(BASE_URL .. "/sessions?token=" .. token, {})
+                if res.status == 200 then
+                    sessions = parse_json(res.body) or {}
+                end
+                last_session_fetch = os.time()
+                fetching_sessions = false
+            end)
+        end
+    end
+
+    if not fetching_sessions and (os.time() - last_session_fetch > 30) then
         fetching_sessions = true
         script.run_in_fiber(function(s)
             local res = osxg.http_get(BASE_URL .. "/sessions?token=" .. token, {})
@@ -175,10 +196,12 @@ osxg_tab:add_imgui(function()
                         s:sleep(1000)
                     end
                     
+                    local sessionInfo = osxg.get_local_session_info()
                     local body = osxg.json_stringify({
                         hostName = name,
                         rid = rid,
-                        sessionType = "Public"
+                        sessionType = "Public",
+                        sessionInfo = sessionInfo
                     })
                     local res = osxg.http_post(BASE_URL .. "/host?token=" .. token, {["Content-Type"]="application/json"}, body)
                     if res.status == 200 then
@@ -237,10 +260,12 @@ osxg_tab:add_imgui(function()
                 s:sleep(1000)
             end
 
+            local sessionInfo = osxg.get_local_session_info()
             local body = osxg.json_stringify({
                 hostName = name,
                 rid = rid,
-                sessionType = "Public"
+                sessionType = "Public",
+                sessionInfo = sessionInfo
             })
             local res = osxg.http_post(BASE_URL .. "/host?token=" .. token, {["Content-Type"]="application/json"}, body)
             if res.status == 200 then
@@ -263,7 +288,11 @@ osxg_tab:add_imgui(function()
             ImGui.Text(string.format("%s (%s)", session.hostName, session.sessionType))
             ImGui.SameLine()
             if ImGui.Button("Join##" .. tostring(session.rid)) then
-                osxg.join_session_by_rockstar_id(tonumber(session.rid))
+                if session.sessionInfo and session.sessionInfo ~= "" then
+                    osxg.join_session_by_info(session.sessionInfo)
+                else
+                    osxg.join_session_by_rockstar_id(tonumber(session.rid))
+                end
             end
             ImGui.EndGroup()
         end

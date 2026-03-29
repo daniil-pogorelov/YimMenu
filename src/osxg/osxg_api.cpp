@@ -3,6 +3,8 @@
 #include "lua/sol_include.hpp"
 #include "services/players/player_service.hpp"
 #include "util/session.hpp"
+#include "gta_util.hpp"
+#include "pointers.hpp"
 #include "core/enums.hpp"
 #include "http_client/http_client.hpp"
 #include "logger/logger.hpp"
@@ -121,6 +123,29 @@ namespace osxg
 		});
 	}
 
+	static std::string get_local_session_info()
+	{
+		if (!big::gta_util::get_network() || !big::g_pointers->m_gta.m_encode_session_info)
+			return "";
+
+		char buf[0x100]{};
+		if (big::g_pointers->m_gta.m_encode_session_info(&big::gta_util::get_network()->m_last_joined_session, buf, 0xA9, nullptr))
+			return std::string(buf);
+		return "";
+	}
+
+	static void join_session_by_info(const std::string& b64)
+	{
+		if (b64.empty()) return;
+		big::g_fiber_pool->queue_job([b64]() {
+			rage::rlSessionInfo info;
+			if (big::g_pointers->m_gta.m_decode_session_info(&info, b64.c_str(), nullptr))
+				big::session::join_session(info);
+			else
+				LOG(WARNING) << "[OSXG] Failed to decode session info.";
+		});
+	}
+
 	static void create_public_session()
 	{
 		big::g_fiber_pool->queue_job([]() {
@@ -204,6 +229,8 @@ namespace osxg
 		ns["json_stringify"] = json_stringify;
 		ns["get_player_name"] = get_player_name;
 		ns["get_local_player_name"] = get_local_player_name;
+		ns["get_local_session_info"] = get_local_session_info;
+		ns["join_session_by_info"] = join_session_by_info;
 		ns["open_url"] = open_url;
 	}
 }

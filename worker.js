@@ -26,8 +26,10 @@ export default {
     const CLIENT_SECRET = env.CLIENT_SECRET;
     const REDIRECT_URI = env.REDIRECT_URI;
     const GUILD_ID = env.GUILD_ID;
-    const WEBHOOK_URL = env.WEBHOOK_URL; 
     const DISCORD_PUBLIC_KEY = env.DISCORD_PUBLIC_KEY;
+    const BOT_TOKEN = env.BOT_TOKEN;
+    const CHANNEL_ID = env.CHANNEL_ID;
+    const WEBHOOK_URL = env.WEBHOOK_URL;
 
     // ================================================================
     // 1. DISCORD BUTTON INTERACTIONS (The Mailbox Inbox)
@@ -51,8 +53,18 @@ export default {
           const targetRid = customId.split("_")[1];
           const clickerId = interaction.member ? interaction.member.user.id : interaction.user.id;
 
+          // Fetch the session info payload if it exists
+          let sessionInfo = "";
+          const sessionPayload = await env.OSXG_SESSIONS.get(targetRid);
+          if (sessionPayload) {
+              try {
+                  const parsed = JSON.parse(sessionPayload);
+                  if (parsed.sessionInfo) sessionInfo = parsed.sessionInfo;
+              } catch (e) {}
+          }
+
           // Save the invite for the Lua script to pick up (expires in 60 seconds)
-          await env.OSXG_INVITES.put(clickerId, targetRid, { expirationTtl: 60 });
+          await env.OSXG_INVITES.put(clickerId, JSON.stringify({ rid: targetRid, sessionInfo }), { expirationTtl: 60 });
 
           // Send a private ephemeral message back to the user in Discord
           return new Response(JSON.stringify({
@@ -124,29 +136,43 @@ export default {
 
       // POST /host (Added the Discord Button!)
       if (method === "POST" && path === "/host") {
-        const { hostName, rid, sessionType } = await request.json();
+        const { hostName, rid, sessionType, sessionInfo } = await request.json();
         
         const existingSession = await env.OSXG_SESSIONS.get(rid.toString());
         
         // Expiration is 120 seconds. Client must ping /host periodically to keep it alive.
-        await env.OSXG_SESSIONS.put(rid.toString(), JSON.stringify({ hostName, rid, sessionType, timestamp: Date.now() }), { expirationTtl: 120 });
+        await env.OSXG_SESSIONS.put(rid.toString(), JSON.stringify({ hostName, rid, sessionType, sessionInfo, timestamp: Date.now() }), { expirationTtl: 120 });
 
         // Only send discord message if it's a completely newly hosted session
-        if (!existingSession && WEBHOOK_URL) {
-          await fetch(WEBHOOK_URL, {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              embeds: [{
-                title: "🟢 New OSXG+ Session!",
-                description: `**Host:** ${hostName}\n**Type:** ${sessionType}\n**RID:** \`${rid}\``,
-                color: 5763719
-              }],
-              components: [{ // This adds the physical button!
-                type: 1,
-                components: [{ type: 2, style: 3, label: "Join Session", custom_id: `join_${rid}`, emoji: { name: "🎮" } }]
-              }]
-            })
-          });
+        if (!existingSession) {
+          if (BOT_TOKEN && CHANNEL_ID) {
+            await fetch(`https://discord.com/api/v10/channels/${CHANNEL_ID}/messages`, {
+              method: "POST", 
+              headers: { 
+                  "Content-Type": "application/json",
+                  "Authorization": `Bot ${BOT_TOKEN}`
+              },
+              body: JSON.stringify({
+                embeds: [{
+                  title: "🟢 New OSXG+ Session!",
+                  description: `**Host:** ${hostName}\n**Type:** ${sessionType}\n**RID:** \`${rid}\``,
+                  color: 5763719
+                }],
+                components: [{
+                  type: 1,
+                  components: [{ type: 2, style: 3, label: "Join Session", custom_id: `join_${rid}`, emoji: { name: "🎮" } }]
+                }]
+              })
+            });
+          } else if (WEBHOOK_URL) {
+            // Fallback for standard webhooks (Discord API strips buttons from standard webhooks)
+            await fetch(WEBHOOK_URL, {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                content: `**🟢 New OSXG+ Session Hosted by ${hostName}!**\nType: ${sessionType} | RID: \`${rid}\``
+              })
+            });
+          }
         }
         return new Response("Session Hosted!", { status: 200 });
       }
@@ -162,10 +188,16 @@ export default {
 
       // GET /invites/check (The Mailman checking the Inbox)
       if (method === "GET" && path === "/invites/check") {
-        const pendingRid = await env.OSXG_INVITES.get(discordId);
-        if (pendingRid) {
+        const pendingInvite = await env.OSXG_INVITES.get(discordId);
+        if (pendingInvite) {
           await env.OSXG_INVITES.delete(discordId); // Delete it so we don't join twice
-          return new Response(JSON.stringify({ rid: pendingRid }), { headers: { "Content-Type": "application/json" } });
+          try {
+            // It might be a JSON payload from the new worker or an old raw RID string
+            const data = JSON.parse(pendingInvite);
+            return new Response(JSON.stringify({ rid: data.rid, sessionInfo: data.sessionInfo }), { headers: { "Content-Type": "application/json" } });
+          } catch(e) {
+            return new Response(JSON.stringify({ rid: pendingInvite }), { headers: { "Content-Type": "application/json" } });
+          }
         }
         return new Response(JSON.stringify({ status: "empty" }), { headers: { "Content-Type": "application/json" } });
       }
