@@ -3,6 +3,7 @@
 #include "lua/sol_include.hpp"
 #include "services/players/player_service.hpp"
 #include "util/session.hpp"
+#include "core/enums.hpp"
 #include "http_client/http_client.hpp"
 #include "logger/logger.hpp"
 #include "fiber_pool.hpp"
@@ -123,7 +124,7 @@ namespace osxg
 	static void create_public_session()
 	{
 		big::g_fiber_pool->queue_job([]() {
-			big::session::join_type(eSessionType::NEW_PUBLIC);
+			big::session::join_type(big::eSessionType::NEW_PUBLIC);
 		});
 	}
 
