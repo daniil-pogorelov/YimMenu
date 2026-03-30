@@ -124,8 +124,15 @@ local function poll_invites()
                 if res.status == 200 then
                     local data = parse_json(res.body)
                     if data and data.status == "awaiting_invite" then
-                        gui.show_message("OSXG+", "Join request recognized. Waiting for host to invite...")
-                        start_auto_accept()
+                        if data.hostRid then
+                            gui.show_message("OSXG+", "Join request recognized. Joining Host " .. data.hostRid)
+                            osxg.join_session_by_rockstar_id(tonumber(data.hostRid))
+                            -- Also start auto-accept just in case direct join fails but invite arrives
+                            start_auto_accept()
+                        else
+                            gui.show_message("OSXG+", "Join request recognized. Waiting for host to invite...")
+                            start_auto_accept()
+                        end
                     end
                 end
 
