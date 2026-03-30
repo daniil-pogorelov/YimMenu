@@ -56,9 +56,10 @@ export default {
           // Look up the joiner's registered Rockstar ID
           const joinerRid = await env.OSXG_RIDS.get(clickerId);
           if (!joinerRid) {
+            const workerUrl = new URL(request.url).origin;
             return new Response(JSON.stringify({
               type: 4,
-              data: { content: "❌ You need to be in-game with OSXG+ active and registered before clicking Join!", flags: 64 }
+              data: { content: `You are not registered. Open this URL in your browser to register your Rockstar ID, replacing YOUR_RID with your actual RID:\n\`${workerUrl}/register_rid?token=YOUR_TOKEN&rid=YOUR_RID\`\nYour token is in the file OSXG_Token.txt inside your GTA V folder.`, flags: 64 }
             }), { headers: { "Content-Type": "application/json" } });
           }
 
@@ -68,9 +69,12 @@ export default {
           if (!queue.includes(joinerRid)) queue.push(joinerRid);
           await env.OSXG_PENDING.put(targetRid, JSON.stringify(queue), { expirationTtl: 120 });
 
+          // Also tell the joiner's client that an invite is coming so it can auto-accept
+          await env.OSXG_INVITES.put(clickerId, JSON.stringify({ status: "awaiting_invite", hostRid: targetRid }), { expirationTtl: 120 });
+
           return new Response(JSON.stringify({
             type: 4,
-            data: { content: "✅ Join request sent! The host's game will send you an invite shortly.", flags: 64 }
+            data: { content: "✅ Join request sent! The host's game will send you an invite shortly. OSXG+ will auto-accept it.", flags: 64 }
           }), { headers: { "Content-Type": "application/json" } });
         }
       }
@@ -115,11 +119,23 @@ export default {
       return new Response(JSON.stringify({ token }), { headers: { "Content-Type": "application/json" } });
     }
 
+    // GET /register_rid — browser-accessible manual registration
+    // User opens: /register_rid?token=THEIR_TOKEN&rid=THEIR_RID
+    if (method === "GET" && path === "/register_rid") {
+      const t = url.searchParams.get("token");
+      const rid = url.searchParams.get("rid");
+      if (!t || !rid) return new Response("Missing token or rid", { status: 400 });
+      const discordId = await env.OSXG_TOKENS.get(t);
+      if (!discordId) return new Response("Invalid token", { status: 401 });
+      await env.OSXG_RIDS.put(discordId, rid, { expirationTtl: 604800 });
+      return new Response(`Registered. Your Discord account is now linked to RID ${rid}.`, { status: 200 });
+    }
+
     // ================================================================
     // 3. API ROUTES (Requires Token)
     // ================================================================
     const userToken = url.searchParams.get("token");
-    if (path === "/sessions" || path === "/host" || path === "/invites/check" || path === "/register" || path === "/pending_invites" || path === "/unhost") {
+    if (path === "/sessions" || path === "/host" || path === "/invites/check" || path === "/register" || path === "/pending_invites" || path === "/unhost" || path === "/request_invite") {
       if (!userToken) return new Response("Missing Token", { status: 400 });
       const discordId = await env.OSXG_TOKENS.get(userToken);
       if (!discordId) return new Response("Invalid Token", { status: 401 });
@@ -139,6 +155,9 @@ export default {
       if (method === "POST" && path === "/host") {
         const { hostName, rid, sessionType, sessionInfo } = await request.json();
         
+        // Also register the host's RID so they appear in OSXG_RIDS for button clicks
+        await env.OSXG_RIDS.put(discordId, rid.toString(), { expirationTtl: 604800 });
+        
         const existingSession = await env.OSXG_SESSIONS.get(rid.toString());
         
         // Expiration is 120 seconds. Client must ping /host periodically to keep it alive.
@@ -148,14 +167,20 @@ export default {
         if (!existingSession) {
           if (BOT_TOKEN && CHANNEL_ID) {
         const body = JSON.stringify({
-              content: `🟢 **${hostName}** just hosted a **${sessionType}** GTA V Session!`,
+              content: `<@${discordId}>`,
+              embeds: [{
+                title: "New GTA V Session",
+                description: `**Host:** <@${discordId}> (${hostName})\n**Type:** ${sessionType}\n**RID:** \`${rid}\``,
+                color: 0x5865F2,
+                timestamp: new Date().toISOString()
+              }],
               components: [{
                 type: 1,
                 components: [
                   {
                     type: 2,
-                    style: 1, // Blurple
-                    label: "Request Invite 🎮",
+                    style: 1,
+                    label: "Request Invite",
                     custom_id: `joinreq_${rid.toString()}`
                   }
                 ]
@@ -187,6 +212,7 @@ export default {
         const { rid } = await request.json();
         if (rid) {
             await env.OSXG_SESSIONS.delete(rid.toString());
+            await env.OSXG_PENDING.delete(rid.toString());
         }
         return new Response("Session Unhosted", { status: 200 });
       }
@@ -213,8 +239,29 @@ export default {
         return new Response(JSON.stringify({ rids: [] }), { headers: { "Content-Type": "application/json" } });
       }
 
-      // GET /invites/check (kept for backwards compat, now unused by main flow)
+      // GET /request_invite — joiner requests the host to send them an in-game invite
+      if (method === "GET" && path === "/request_invite") {
+        const hostRid = url.searchParams.get("host_rid");
+        if (!hostRid) return new Response("Missing host_rid", { status: 400 });
+
+        const joinerRid = await env.OSXG_RIDS.get(discordId);
+        if (!joinerRid) return new Response("Not registered", { status: 404 });
+
+        const existing = await env.OSXG_PENDING.get(hostRid);
+        const queue = existing ? JSON.parse(existing) : [];
+        if (!queue.includes(joinerRid)) queue.push(joinerRid);
+        await env.OSXG_PENDING.put(hostRid, JSON.stringify(queue), { expirationTtl: 120 });
+
+        return new Response("Invite requested", { status: 200 });
+      }
+
+      // GET /invites/check — joiner-side inbox (polls for Discord click recognition)
       if (method === "GET" && path === "/invites/check") {
+        const invite = await env.OSXG_INVITES.get(discordId);
+        if (invite) {
+          await env.OSXG_INVITES.delete(discordId); // Only return once
+          return new Response(invite, { headers: { "Content-Type": "application/json" } });
+        }
         return new Response(JSON.stringify({ status: "empty" }), { headers: { "Content-Type": "application/json" } });
       }
     }

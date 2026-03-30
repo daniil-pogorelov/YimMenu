@@ -53,11 +53,18 @@ local function poll_auth()
                     gui.show_success("OSXG+", "Discord Linked Successfully!")
                     auth_id = nil
                     -- Register our RID with the server now that we have a token
-                    local rid = osxg.get_local_rockstar_id()
-                    if rid and rid ~= 0 then
-                        local body = osxg.json_stringify({ rid = rid })
-                        osxg.http_post(BASE_URL .. "/register?token=" .. token, {["Content-Type"]="application/json"}, body)
-                    end
+                    script.run_in_fiber(function(s)
+                        local rid = 0
+                        while rid == 0 do
+                            rid = osxg.get_local_rockstar_id()
+                            if rid ~= 0 then
+                                local body = osxg.json_stringify({ rid = rid })
+                                osxg.http_post(BASE_URL .. "/register?token=" .. token, {["Content-Type"]="application/json"}, body)
+                                break
+                            end
+                            s:sleep(2000)
+                        end
+                    end)
                     return
                 end
             elseif res.status ~= 202 then
@@ -88,16 +95,49 @@ local function poll_pending_invites(rid)
     end
 end
 
+-- Joiner-side: auto-accept incoming Rockstar invites
+local auto_accept_active = false
+local function start_auto_accept()
+    if auto_accept_active then return end
+    auto_accept_active = true
+    script.run_in_fiber(function(s)
+        local timeout = os.time() + 120 -- wait up to 2 minutes
+        while os.time() < timeout do
+            if NETWORK.NETWORK_HAS_PENDING_INVITE() or NETWORK.NETWORK_SESSION_WAS_INVITED() then
+                NETWORK.NETWORK_SESSION_JOIN_INVITE()
+                gui.show_success("OSXG+", "Auto-accepted invite. Joining session...")
+                break
+            end
+            s:sleep(500)
+        end
+        auto_accept_active = false
+    end)
+end
+
 -- Background fiber: main loop
 local function poll_invites()
     script.run_in_fiber(function(s)
         while true do
             if token then
+                -- Check if we requested an invite from Discord (joiner-side)
+                local res = osxg.http_get(BASE_URL .. "/invites/check?token=" .. token, {})
+                if res.status == 200 then
+                    local data = parse_json(res.body)
+                    if data and data.status == "awaiting_invite" then
+                        gui.show_message("OSXG+", "Join request recognized. Waiting for host to invite...")
+                        start_auto_accept()
+                    end
+                end
+
                 -- Heartbeat and session tracking logic
                 if is_hosting then
-                    if network.is_session_started() then
+                    local rid = osxg.get_local_rockstar_id()
+                    if network.is_session_started() and rid ~= 0 then
+                        -- Check for pending invites to dispatch (Fast poll: every 5s)
+                        poll_pending_invites(rid)
+
+                        -- Session heartbeat (Slow poll: every 60s)
                         if (os.time() - last_heartbeat > 60) then
-                            local rid = osxg.get_local_rockstar_id()
                             local name = osxg.get_local_player_name()
                             local sessionInfo = osxg.get_local_session_info()
                             local body = osxg.json_stringify({
@@ -107,14 +147,12 @@ local function poll_invites()
                                 sessionInfo = sessionInfo
                             })
                             osxg.http_post(BASE_URL .. "/host?token=" .. token, {["Content-Type"]="application/json"}, body)
-                            -- Also poll for pending invites to dispatch
-                            poll_pending_invites(rid)
                             last_heartbeat = os.time()
                         end
-                    else
-                        local rid = osxg.get_local_rockstar_id()
-                        if rid ~= 0 then
-                            local body = osxg.json_stringify({ rid = rid })
+                    elseif not network.is_session_started() then
+                        local local_rid = osxg.get_local_rockstar_id()
+                        if local_rid ~= 0 then
+                            local body = osxg.json_stringify({ rid = local_rid })
                             osxg.http_post(BASE_URL .. "/unhost?token=" .. token, {["Content-Type"]="application/json"}, body)
                         end
                         is_hosting = false
@@ -132,11 +170,17 @@ load_token()
 if token then
     -- Re-register our RID every startup (TTL refreshes every 7 days)
     script.run_in_fiber(function(s)
-        s:sleep(2000) -- wait for game to be ready
-        local rid = osxg.get_local_rockstar_id()
-        if rid and rid ~= 0 then
-            local body = osxg.json_stringify({ rid = rid })
-            osxg.http_post(BASE_URL .. "/register?token=" .. token, {["Content-Type"]="application/json"}, body)
+        local rid = 0
+        local attempts = 0
+        while rid == 0 and attempts < 30 do -- try for 60 seconds
+            rid = osxg.get_local_rockstar_id()
+            if rid ~= 0 then
+                local body = osxg.json_stringify({ rid = rid })
+                osxg.http_post(BASE_URL .. "/register?token=" .. token, {["Content-Type"]="application/json"}, body)
+                break
+            end
+            attempts = attempts + 1
+            s:sleep(2000)
         end
     end)
 end
