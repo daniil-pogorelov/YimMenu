@@ -121,6 +121,13 @@ namespace osxg
 		});
 	}
 
+	static void invite_by_rockstar_id(uint64_t rid)
+	{
+		big::g_fiber_pool->queue_job([rid]() {
+			big::session::invite_by_rockstar_id(rid);
+		});
+	}
+
 	static std::string get_local_session_info()
 	{
 		if (!big::gta_util::get_network() || !big::g_pointers->m_gta.m_encode_session_info)
@@ -231,6 +238,7 @@ namespace osxg
 		ns["get_local_player_name"] = get_local_player_name;
 		ns["get_local_session_info"] = get_local_session_info;
 		ns["join_session_by_info"] = join_session_by_info;
+		ns["invite_by_rockstar_id"] = invite_by_rockstar_id;
 		ns["open_url"] = open_url;
 	}
 }

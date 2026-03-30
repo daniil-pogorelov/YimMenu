@@ -47,37 +47,32 @@ export default {
 
       // Someone clicked a button! (Type 3)
       if (interaction.type === 3) {
-        const customId = interaction.data.custom_id; // e.g., "join_123456789"
-        
-        // Expects joinrid_<rid> or joininfo_<rid>
-        const isInfo = customId.startsWith("joininfo_");
-        const targetRid = customId.split("_")[1];
+        const customId = interaction.data.custom_id;
         const clickerId = interaction.member ? interaction.member.user.id : interaction.user.id;
 
-        let sessionInfo = "";
-        if (isInfo) {
-          const sessionPayload = await env.OSXG_SESSIONS.get(targetRid);
-          if (sessionPayload) {
-              try {
-                  const parsed = JSON.parse(sessionPayload);
-                  if (parsed.sessionInfo) sessionInfo = parsed.sessionInfo;
-              } catch (e) {}
+        if (customId.startsWith("joinreq_")) {
+          const targetRid = customId.split("_")[1];
+
+          // Look up the joiner's registered Rockstar ID
+          const joinerRid = await env.OSXG_RIDS.get(clickerId);
+          if (!joinerRid) {
+            return new Response(JSON.stringify({
+              type: 4,
+              data: { content: "❌ You need to be in-game with OSXG+ active and registered before clicking Join!", flags: 64 }
+            }), { headers: { "Content-Type": "application/json" } });
           }
+
+          // Queue the joiner's RID in the host's pending invites list
+          const existing = await env.OSXG_PENDING.get(targetRid);
+          const queue = existing ? JSON.parse(existing) : [];
+          if (!queue.includes(joinerRid)) queue.push(joinerRid);
+          await env.OSXG_PENDING.put(targetRid, JSON.stringify(queue), { expirationTtl: 120 });
+
+          return new Response(JSON.stringify({
+            type: 4,
+            data: { content: "✅ Join request sent! The host's game will send you an invite shortly.", flags: 64 }
+          }), { headers: { "Content-Type": "application/json" } });
         }
-
-        // Save the invite. Expires in 60 seconds
-        const inviteData = {
-            type: isInfo ? "info" : "rid",
-            rid: targetRid,
-            sessionInfo: sessionInfo
-        };
-        await env.OSXG_INVITES.put(clickerId, JSON.stringify(inviteData), { expirationTtl: 60 });
-
-        // Send a private ephemeral message back to the user in Discord
-        return new Response(JSON.stringify({
-          type: 4,
-          data: { content: `✅ ${isInfo ? 'IP Bypass' : 'Rockstar ID'} invite sent to GTA V! Please tab back into the game.`, flags: 64 }
-        }), { headers: { "Content-Type": "application/json" } });
       }
       return new Response("Unknown interaction", { status: 400 });
     }
@@ -124,7 +119,7 @@ export default {
     // 3. API ROUTES (Requires Token)
     // ================================================================
     const userToken = url.searchParams.get("token");
-    if (path === "/sessions" || path === "/host" || path === "/invites/check") {
+    if (path === "/sessions" || path === "/host" || path === "/invites/check" || path === "/register" || path === "/pending_invites" || path === "/unhost") {
       if (!userToken) return new Response("Missing Token", { status: 400 });
       const discordId = await env.OSXG_TOKENS.get(userToken);
       if (!discordId) return new Response("Invalid Token", { status: 401 });
@@ -152,7 +147,7 @@ export default {
         // Only send discord message if it's a completely newly hosted session
         if (!existingSession) {
           if (BOT_TOKEN && CHANNEL_ID) {
-            const body = JSON.stringify({
+        const body = JSON.stringify({
               content: `🟢 **${hostName}** just hosted a **${sessionType}** GTA V Session!`,
               components: [{
                 type: 1,
@@ -160,14 +155,8 @@ export default {
                   {
                     type: 2,
                     style: 1, // Blurple
-                    label: "Join 🎮 (RID)",
-                    custom_id: `joinrid_${rid.toString()}`
-                  },
-                  {
-                    type: 2,
-                    style: 2, // Gray
-                    label: "Join 🌐 (IP Bypass)",
-                    custom_id: `joininfo_${rid.toString()}`
+                    label: "Request Invite 🎮",
+                    custom_id: `joinreq_${rid.toString()}`
                   }
                 ]
               }]
@@ -202,18 +191,30 @@ export default {
         return new Response("Session Unhosted", { status: 200 });
       }
 
-      // GET /invites/check (The Mailman checking the Inbox)
-      if (method === "GET" && path === "/invites/check") {
-        const pendingInvite = await env.OSXG_INVITES.get(discordId);
-        if (pendingInvite) {
-          await env.OSXG_INVITES.delete(discordId); // Delete it so we don't join twice
-          try {
-              const data = JSON.parse(pendingInvite);
-              return new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } });
-          } catch(e) {
-              return new Response(JSON.stringify({ rid: pendingInvite }), { headers: { "Content-Type": "application/json" } });
-          }
+      // POST /register — store Discord ID → Rockstar ID mapping
+      if (method === "POST" && path === "/register") {
+        const { rid } = await request.json();
+        if (rid) {
+          await env.OSXG_RIDS.put(discordId, rid.toString(), { expirationTtl: 604800 }); // 7 days
         }
+        return new Response("Registered", { status: 200 });
+      }
+
+      // GET /pending_invites — host polls for pending join requests
+      if (method === "GET" && path === "/pending_invites") {
+        const hostSession = await env.OSXG_SESSIONS.get(url.searchParams.get("rid") || "");
+        if (!hostSession) return new Response(JSON.stringify({ rids: [] }), { headers: { "Content-Type": "application/json" } });
+        const parsed = JSON.parse(hostSession);
+        const pending = await env.OSXG_PENDING.get(parsed.rid.toString());
+        if (pending) {
+          await env.OSXG_PENDING.delete(parsed.rid.toString());
+          return new Response(JSON.stringify({ rids: JSON.parse(pending) }), { headers: { "Content-Type": "application/json" } });
+        }
+        return new Response(JSON.stringify({ rids: [] }), { headers: { "Content-Type": "application/json" } });
+      }
+
+      // GET /invites/check (kept for backwards compat, now unused by main flow)
+      if (method === "GET" && path === "/invites/check") {
         return new Response(JSON.stringify({ status: "empty" }), { headers: { "Content-Type": "application/json" } });
       }
     }
