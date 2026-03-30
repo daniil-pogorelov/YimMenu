@@ -461,7 +461,6 @@ namespace big
 
 			// not to be saved
 			bool join_queued = false;
-			uint64_t target_rid = 0;
 			rage::rlSessionInfo info;
 			bool never_wanted_all = false;
 			bool off_radar_all    = false;
